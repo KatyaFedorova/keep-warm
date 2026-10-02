@@ -133,6 +133,18 @@
     max-width: calc(100vw - 32px);
   }
   .toast button { background: none; border: none; color: var(--accent); font-weight: 600; padding: 4px 8px; }
+  .similar {
+    margin: -16px 0 28px;
+    padding: 12px 14px;
+    background: var(--due);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    font-size: 14px;
+  }
+  dialog .similar { margin: 0 0 12px; }
+  .similar ul { display: block; margin: 4px 0 10px; padding-left: 18px; list-style: disc; }
+  .similar .similar-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .similar button { padding: 6px 12px; font-size: 14px; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -153,6 +165,15 @@
     </select>
     <button class="primary" type="submit">Add</button>
   </form>
+
+  <div class="similar" id="addSimilar" role="alert" hidden>
+    <strong>Similar name already added:</strong>
+    <ul id="addSimilarList"></ul>
+    <div class="similar-actions">
+      <button type="button" id="addSimilarCancel">Cancel</button>
+      <button type="button" class="primary" id="addSimilarConfirm">Add anyway</button>
+    </div>
+  </div>
 
   <section id="due">
     <h2><span>Text this month</span><span id="dueCount"></span></h2>
@@ -189,6 +210,14 @@
       </select>
     </label>
     <label>Last texted <input type="date" id="editLast"></label>
+    <div class="similar" id="editSimilar" role="alert" hidden>
+      <strong>Similar name already added:</strong>
+      <ul id="editSimilarList"></ul>
+      <div class="similar-actions">
+        <button type="button" id="editSimilarCancel">Cancel</button>
+        <button type="button" class="primary" id="editSimilarConfirm">Save anyway</button>
+      </div>
+    </div>
     <div class="dialog-actions">
       <button type="button" class="ghost danger" id="deleteBtn">Delete</button>
       <span>
@@ -304,16 +333,46 @@
     return li;
   }
 
+  // ---- similar-name check ----
+  // Words: lowercase, accents stripped, split on anything that isn't a letter/digit, single letters ignored.
+  const words = name => name.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 1);
+  // Two words match if equal, or one starts with the other (prefix at least 3 letters).
+  const wordsMatch = (a, b) => a === b || (Math.min(a.length, b.length) >= 3 && (a.startsWith(b) || b.startsWith(a)));
+  function findSimilar(name, excludeId) {
+    const mine = words(name);
+    return people.filter(p => p.id !== excludeId && words(p.name).some(w => mine.some(m => wordsMatch(w, m))));
+  }
+  function showSimilar(listId, boxId, matches) {
+    $(listId).replaceChildren(...matches.map(p => {
+      const li = document.createElement('li');
+      li.textContent = `${p.name} (${FREQ_LABEL[p.freq]}, ${p.last ? `last ${prettyDate(p.last)}` : 'never texted'})`;
+      return li;
+    }));
+    $(boxId).hidden = false;
+  }
+
   // ---- actions ----
-  $('addForm').addEventListener('submit', e => {
-    e.preventDefault();
+  function addPerson() {
     const name = $('addName').value.trim();
     if (!name) return;
     people.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()), name, freq: Number($('addFreq').value), last: null });
     save(); render();
+    $('addSimilar').hidden = true;
     $('addName').value = '';
     $('addName').focus();
+  }
+  $('addForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const name = $('addName').value.trim();
+    if (!name) return;
+    const matches = findSimilar(name);
+    if (matches.length) showSimilar('addSimilarList', 'addSimilar', matches);
+    else addPerson();
   });
+  $('addSimilarConfirm').onclick = addPerson;
+  $('addSimilarCancel').onclick = () => { $('addSimilar').hidden = true; $('addName').focus(); };
+  $('addName').addEventListener('input', () => { $('addSimilar').hidden = true; });
 
   let undoState = null, toastTimer = null;
   function markTexted(id) {
@@ -347,16 +406,31 @@
     $('editFreq').value = String(p.freq);
     $('editLast').value = p.last || '';
     $('editLast').max = isoToday();
+    $('editSimilar').hidden = true;
     $('editDialog').showModal();
   }
-  $('editForm').addEventListener('submit', () => {
+  function saveEdit() {
     const p = people.find(x => x.id === editingId);
     if (!p) return;
     p.name = $('editName').value.trim() || p.name;
     p.freq = Number($('editFreq').value);
     p.last = $('editLast').value || null;
     save(); render();
+    $('editDialog').close();
+  }
+  $('editForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const p = people.find(x => x.id === editingId);
+    if (!p) return;
+    const name = $('editName').value.trim();
+    // Only check when the name actually changed.
+    const matches = name && name !== p.name ? findSimilar(name, p.id) : [];
+    if (matches.length) showSimilar('editSimilarList', 'editSimilar', matches);
+    else saveEdit();
   });
+  $('editSimilarConfirm').onclick = saveEdit;
+  $('editSimilarCancel').onclick = () => { $('editSimilar').hidden = true; $('editName').focus(); };
+  $('editName').addEventListener('input', () => { $('editSimilar').hidden = true; });
   $('cancelBtn').onclick = () => $('editDialog').close();
   $('deleteBtn').onclick = () => {
     const p = people.find(x => x.id === editingId);
